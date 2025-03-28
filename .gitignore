@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Backup files
+*.bak
+
+# Data directory
+data/
+
+# IDE files
+.idea/
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints
