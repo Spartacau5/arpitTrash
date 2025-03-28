@@ -41,8 +41,8 @@ class RecyclableClassifier(nn.Module):
     def __init__(self, num_classes=6):  # Default to common waste categories: plastic, metal, paper, glass, organic, non-recyclable
         super(RecyclableClassifier, self).__init__()
 
-        # Load pre-trained MobileNetV2 model
-        self.backbone = models.mobilenet_v2(pretrained=True)
+        # Load pre-trained MobileNetV2 model with updated API
+        self.backbone = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
 
         # Replace the last classifier layer
         in_features = self.backbone.classifier[1].in_features
