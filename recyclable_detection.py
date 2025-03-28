@@ -38,7 +38,7 @@ class RecyclableClassifier(nn.Module):
     Custom classifier for recyclable materials using transfer learning
     with a pre-trained MobileNetV2 backbone.
     """
-    def __init__(self, num_classes=6):  # Default to common waste categories: plastic, metal, paper, glass, organic, non-recyclable
+    def __init__(self, num_classes=5):  # Default to our categories: plastic, metal, paper, glass, other
         super(RecyclableClassifier, self).__init__()
 
         # Load pre-trained MobileNetV2 model with updated API
@@ -111,12 +111,11 @@ class RecyclableDetectionSystem:
         # By default, we'll consider plastic, metal, paper, and glass as recyclable
         if recyclable_categories is None:
             self.recyclable_categories = {
-                0: True,    # plastic - recyclable
+                0: True,    # glass - recyclable
                 1: True,    # metal - recyclable
-                2: True,    # paper - recyclable
-                3: True,    # glass - recyclable
-                4: False,   # organic - not recyclable (in standard recycling)
-                5: False,   # non-recyclable
+                2: False,   # other - not recyclable
+                3: True,    # paper - recyclable
+                4: True,    # plastic - recyclable
             }
         else:
             self.recyclable_categories = recyclable_categories
@@ -131,8 +130,8 @@ class RecyclableDetectionSystem:
             )
         ])
 
-        # Class names for classifier
-        self.class_names = ['plastic', 'metal', 'paper', 'glass', 'organic', 'other']
+        # Class names for classifier - must match order from training dataset
+        self.class_names = ['glass', 'metal', 'other', 'paper', 'plastic']
 
     def classify_object(self, image_crop):
         """Classify a cropped object image as recyclable or not"""
