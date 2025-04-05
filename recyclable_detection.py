@@ -25,6 +25,13 @@ from PIL import Image
 from pathlib import Path
 import csv
 from datetime import datetime
+import urllib.request
+import json
+import zipfile
+import tarfile
+import shutil
+import requests
+from tqdm import tqdm
 
 # For YOLOv8, we'll use the Ultralytics implementation
 try:
@@ -1256,12 +1263,827 @@ def download_trashnet():
         traceback.print_exc()
         return None
 
+# Dataset integration module
+class DatasetIntegrator:
+    """
+    Module to fetch, process, and integrate open-source datasets
+    for improved material and object recognition.
+    """
+    def __init__(self, data_dir="data/external_datasets"):
+        self.data_dir = data_dir
+        self.dataset_registry = {
+            "materialnet": {
+                "url": "https://huggingface.co/datasets/materialsnet/materials-images/resolve/main/sample_data.zip",
+                "description": "Material property dataset with visual samples",
+                "citation": "MaterialsNet Project"
+            },
+            "trashtalk": {
+                "url": "https://huggingface.co/datasets/Yassin/TrashTalk/resolve/main/data-00000-of-00001.arrow",
+                "description": "Waste classification dataset with 7 categories",
+                "citation": "TrashTalk Dataset, Yassin"
+            },
+            "taco": {
+                "url": "https://github.com/pedropro/TACO/raw/master/data/annotations.json",
+                "description": "Trash Annotations in Context - waste in natural environments",
+                "citation": "Pedro F. Proença and Pedro Simões, 2020"
+            },
+            "waste_imgs": {
+                "url": "https://huggingface.co/datasets/nateraw/waste-imgs/resolve/main/archive.zip",
+                "description": "Waste image classification dataset with 6 categories",
+                "citation": "Waste-Imgs Dataset, Nathan Raw"
+            },
+            "dtd": {
+                "url": "https://www.robots.ox.ac.uk/~vgg/data/dtd/download/dtd-r1.0.1.tar.gz",
+                "description": "Describable Textures Dataset - detailed texture classification",
+                "citation": "M. Cimpoi et al., CVPR 2014"
+            }
+        }
+        
+        # Create the data directory if it doesn't exist
+        os.makedirs(self.data_dir, exist_ok=True)
+        
+        # Initialize the dataset information
+        self.available_datasets = {}
+        self.scan_available_datasets()
+    
+    def scan_available_datasets(self):
+        """Scan the data directory for available datasets"""
+        for dataset_name in self.dataset_registry.keys():
+            dataset_path = os.path.join(self.data_dir, dataset_name)
+            if os.path.exists(dataset_path):
+                self.available_datasets[dataset_name] = {
+                    "path": dataset_path,
+                    "info": self.dataset_registry[dataset_name]
+                }
+    
+    def download_dataset(self, dataset_name, force=False):
+        """Download a dataset from the registry"""
+        if dataset_name not in self.dataset_registry:
+            print(f"Error: Dataset '{dataset_name}' not found in registry")
+            return False
+        
+        dataset_path = os.path.join(self.data_dir, dataset_name)
+        if os.path.exists(dataset_path) and not force:
+            print(f"Dataset '{dataset_name}' already exists. Use force=True to redownload.")
+            return True
+        
+        # Create the dataset directory
+        os.makedirs(dataset_path, exist_ok=True)
+        
+        # Get the dataset URL
+        url = self.dataset_registry[dataset_name]["url"]
+        
+        # Download the dataset
+        print(f"Downloading dataset '{dataset_name}' from {url}")
+        try:
+            # Create a temporary file for the download
+            temp_file = os.path.join(dataset_path, "temp_download")
+            
+            # Use tqdm to show progress
+            response = requests.get(url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            
+            with open(temp_file, 'wb') as f, tqdm(
+                desc=dataset_name,
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+            ) as bar:
+                for data in response.iter_content(chunk_size=1024):
+                    size = f.write(data)
+                    bar.update(size)
+            
+            # Extract if it's a zip or tar file
+            if url.endswith('.zip'):
+                print(f"Extracting zip file for '{dataset_name}'")
+                with zipfile.ZipFile(temp_file, 'r') as zip_ref:
+                    zip_ref.extractall(dataset_path)
+                os.remove(temp_file)
+            elif url.endswith('.tar.gz') or url.endswith('.tgz'):
+                print(f"Extracting tar.gz file for '{dataset_name}'")
+                with tarfile.open(temp_file, 'r:gz') as tar_ref:
+                    tar_ref.extractall(dataset_path)
+                os.remove(temp_file)
+            elif url.endswith('.arrow'):
+                # Arrow files are for HuggingFace datasets, keep as is
+                os.rename(temp_file, os.path.join(dataset_path, "data.arrow"))
+            
+            # Update available datasets
+            self.available_datasets[dataset_name] = {
+                "path": dataset_path,
+                "info": self.dataset_registry[dataset_name]
+            }
+            
+            print(f"Successfully downloaded dataset '{dataset_name}'")
+            return True
+            
+        except Exception as e:
+            print(f"Error downloading dataset '{dataset_name}': {e}")
+            return False
+    
+    def download_all_datasets(self, force=False):
+        """Download all datasets in the registry"""
+        for dataset_name in self.dataset_registry.keys():
+            self.download_dataset(dataset_name, force)
+    
+    def prepare_dataset_for_training(self, dataset_name, target_dir=None):
+        """
+        Prepare a dataset for training by organizing it into the right structure
+        and converting to the right format.
+        """
+        if dataset_name not in self.available_datasets:
+            print(f"Error: Dataset '{dataset_name}' not found or not downloaded")
+            return False
+        
+        dataset_path = self.available_datasets[dataset_name]["path"]
+        
+        # If no target directory specified, create one under the dataset
+        if target_dir is None:
+            target_dir = os.path.join(dataset_path, "prepared")
+        
+        # Create the target directory
+        os.makedirs(target_dir, exist_ok=True)
+        
+        # Create train and val directories
+        train_dir = os.path.join(target_dir, "train")
+        val_dir = os.path.join(target_dir, "val")
+        os.makedirs(train_dir, exist_ok=True)
+        os.makedirs(val_dir, exist_ok=True)
+        
+        print(f"Preparing dataset '{dataset_name}' for training")
+        
+        try:
+            # Handle different dataset formats
+            if dataset_name == "materialnet":
+                # MaterialNet dataset preparation
+                # Usually contains material classes as directories
+                self._prepare_materialnet_dataset(dataset_path, train_dir, val_dir)
+            elif dataset_name == "trashtalk":
+                # TrashTalk dataset preparation
+                # Use HuggingFace datasets to load
+                self._prepare_huggingface_dataset(dataset_path, train_dir, val_dir, "Yassin/TrashTalk")
+            elif dataset_name == "taco":
+                # TACO dataset preparation
+                self._prepare_taco_dataset(dataset_path, train_dir, val_dir)
+            elif dataset_name == "waste_imgs":
+                # Waste-imgs dataset preparation
+                self._prepare_wasteimgs_dataset(dataset_path, train_dir, val_dir)
+            elif dataset_name == "dtd":
+                # DTD dataset preparation
+                self._prepare_dtd_dataset(dataset_path, train_dir, val_dir)
+            else:
+                print(f"Warning: No specific preparation method for dataset '{dataset_name}'")
+                print("Using generic directory-based preparation method")
+                self._prepare_generic_dataset(dataset_path, train_dir, val_dir)
+            
+            print(f"Successfully prepared dataset '{dataset_name}' for training")
+            return True
+            
+        except Exception as e:
+            print(f"Error preparing dataset '{dataset_name}': {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _prepare_materialnet_dataset(self, dataset_path, train_dir, val_dir):
+        """Prepare the MaterialNet dataset for training"""
+        import glob
+        
+        # Map original classes to our target classes
+        class_mapping = {
+            "metal": "metal",
+            "plastic": "plastic",
+            "glass": "glass",
+            "paper": "paper",
+            "cardboard": "paper",
+            "ceramic": "other",
+            "wood": "other",
+            "fabric": "other",
+            "leather": "other",
+            "other": "other"
+        }
+        
+        # Create class directories
+        for target_class in set(class_mapping.values()):
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Find all image files
+        image_files = []
+        for ext in ['.jpg', '.jpeg', '.png']:
+            image_files.extend(glob.glob(os.path.join(dataset_path, "**", f"*{ext}"), recursive=True))
+        
+        # Shuffle the files for randomness
+        import random
+        random.shuffle(image_files)
+        
+        # Split into train and validation (80/20)
+        split_idx = int(len(image_files) * 0.8)
+        train_files = image_files[:split_idx]
+        val_files = image_files[split_idx:]
+        
+        # Process training files
+        for file_path in train_files:
+            # Determine the class from the file path
+            original_class = os.path.basename(os.path.dirname(file_path)).lower()
+            
+            # Map to our target classes
+            target_class = class_mapping.get(original_class, "other")
+            
+            # Create a new filename
+            filename = f"{original_class}_{os.path.basename(file_path)}"
+            
+            # Copy the file to the target directory
+            shutil.copy(file_path, os.path.join(train_dir, target_class, filename))
+        
+        # Process validation files
+        for file_path in val_files:
+            # Determine the class from the file path
+            original_class = os.path.basename(os.path.dirname(file_path)).lower()
+            
+            # Map to our target classes
+            target_class = class_mapping.get(original_class, "other")
+            
+            # Create a new filename
+            filename = f"{original_class}_{os.path.basename(file_path)}"
+            
+            # Copy the file to the target directory
+            shutil.copy(file_path, os.path.join(val_dir, target_class, filename))
+
+    def _prepare_generic_dataset(self, dataset_path, train_dir, val_dir):
+        """Generic preparation method for directory-based datasets"""
+        import glob
+        
+        # Map original classes to our target classes - to be customized
+        class_mapping = {
+            "metal": "metal",
+            "plastic": "plastic",
+            "glass": "glass",
+            "paper": "paper",
+            "cardboard": "paper",
+            "ceramic": "other",
+            "wood": "other",
+            "fabric": "other",
+            "leather": "other",
+            "other": "other"
+        }
+        
+        # Create class directories
+        for target_class in set(class_mapping.values()):
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Find all image files
+        image_files = []
+        for ext in ['.jpg', '.jpeg', '.png']:
+            image_files.extend(glob.glob(os.path.join(dataset_path, "**", f"*{ext}"), recursive=True))
+        
+        # Shuffle the files for randomness
+        import random
+        random.shuffle(image_files)
+        
+        # Split into train and validation (80/20)
+        split_idx = int(len(image_files) * 0.8)
+        train_files = image_files[:split_idx]
+        val_files = image_files[split_idx:]
+        
+        # Process training files
+        for file_path in train_files:
+            # Try to determine the class from the file path
+            dir_names = file_path.split(os.sep)
+            original_class = "other"
+            
+            # Check each directory name if it's a known class
+            for dir_name in dir_names:
+                if dir_name.lower() in class_mapping:
+                    original_class = dir_name.lower()
+                    break
+            
+            # Map to our target classes
+            target_class = class_mapping.get(original_class, "other")
+            
+            # Create a new filename
+            filename = f"{original_class}_{os.path.basename(file_path)}"
+            
+            # Copy the file to the target directory
+            shutil.copy(file_path, os.path.join(train_dir, target_class, filename))
+        
+        # Process validation files
+        for file_path in val_files:
+            # Try to determine the class from the file path
+            dir_names = file_path.split(os.sep)
+            original_class = "other"
+            
+            # Check each directory name if it's a known class
+            for dir_name in dir_names:
+                if dir_name.lower() in class_mapping:
+                    original_class = dir_name.lower()
+                    break
+            
+            # Map to our target classes
+            target_class = class_mapping.get(original_class, "other")
+            
+            # Create a new filename
+            filename = f"{original_class}_{os.path.basename(file_path)}"
+            
+            # Copy the file to the target directory
+            shutil.copy(file_path, os.path.join(val_dir, target_class, filename))
+    
+    def _prepare_huggingface_dataset(self, dataset_path, train_dir, val_dir, dataset_name):
+        """Prepare a HuggingFace dataset for training"""
+        from datasets import load_dataset
+        
+        # Map original classes to our target classes - customize based on dataset
+        class_mapping = {
+            "metal": "metal",
+            "plastic": "plastic",
+            "glass": "glass",
+            "paper": "paper",
+            "cardboard": "paper",
+            "biological": "other",
+            "trash": "other",
+            "other": "other"
+        }
+        
+        # Create class directories
+        for target_class in set(class_mapping.values()):
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Load the dataset
+        try:
+            dataset = load_dataset(dataset_name)
+        except:
+            # Try to load from local file
+            dataset = load_dataset("arrow", data_files={"train": os.path.join(dataset_path, "data.arrow")})
+        
+        # Get the splits
+        train_split = dataset.get("train", dataset.get("training", None))
+        val_split = dataset.get("validation", dataset.get("val", None))
+        
+        # If no validation split, create one from train (80/20)
+        if val_split is None and train_split is not None:
+            splits = train_split.train_test_split(test_size=0.2)
+            train_split = splits["train"]
+            val_split = splits["test"]
+        
+        # Process training split
+        if train_split is not None:
+            for i, example in enumerate(train_split):
+                if "image" in example:
+                    image = example["image"]
+                    
+                    # Determine class
+                    if "label" in example:
+                        if isinstance(example["label"], str):
+                            original_class = example["label"].lower()
+                        else:
+                            # Convert numerical label to string
+                            # Assuming the dataset has a feature with class names
+                            class_names = train_split.features["label"].names
+                            original_class = class_names[example["label"]].lower()
+                    else:
+                        original_class = "other"
+                    
+                    # Map to target class
+                    target_class = class_mapping.get(original_class, "other")
+                    
+                    # Save image
+                    filename = f"{original_class}_{i}.jpg"
+                    image_path = os.path.join(train_dir, target_class, filename)
+                    image.save(image_path)
+        
+        # Process validation split
+        if val_split is not None:
+            for i, example in enumerate(val_split):
+                if "image" in example:
+                    image = example["image"]
+                    
+                    # Determine class
+                    if "label" in example:
+                        if isinstance(example["label"], str):
+                            original_class = example["label"].lower()
+                        else:
+                            # Convert numerical label to string
+                            # Assuming the dataset has a feature with class names
+                            class_names = val_split.features["label"].names
+                            original_class = class_names[example["label"]].lower()
+                    else:
+                        original_class = "other"
+                    
+                    # Map to target class
+                    target_class = class_mapping.get(original_class, "other")
+                    
+                    # Save image
+                    filename = f"{original_class}_{i}.jpg"
+                    image_path = os.path.join(val_dir, target_class, filename)
+                    image.save(image_path)
+
+    def _prepare_taco_dataset(self, dataset_path, train_dir, val_dir):
+        """Prepare the TACO dataset for training"""
+        # TACO uses COCO-format annotations, parse the JSON file
+        annotations_file = os.path.join(dataset_path, "annotations.json")
+        
+        if not os.path.exists(annotations_file):
+            print(f"Error: TACO annotations file not found at {annotations_file}")
+            return
+        
+        # Load annotations
+        with open(annotations_file, 'r') as f:
+            data = json.load(f)
+        
+        # Define category mappings
+        # Map TACO categories to our categories
+        category_mapping = {}
+        
+        for category in data.get("categories", []):
+            # Get the supercategory and name
+            supercategory = category.get("supercategory", "").lower()
+            name = category.get("name", "").lower()
+            
+            # Map to our categories
+            if "metal" in name or "aluminum" in name or supercategory == "metal":
+                target_class = "metal"
+            elif "plastic" in name or supercategory == "plastic":
+                target_class = "plastic"
+            elif "glass" in name or supercategory == "glass":
+                target_class = "glass"
+            elif "paper" in name or "cardboard" in name or supercategory == "paper":
+                target_class = "paper"
+            else:
+                target_class = "other"
+            
+            # Store the mapping
+            category_mapping[category["id"]] = target_class
+        
+        # Create class directories
+        for target_class in set(category_mapping.values()):
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Create a map from image ID to file path
+        image_paths = {}
+        for image in data.get("images", []):
+            image_id = image["id"]
+            file_name = image["file_name"]
+            
+            # Get full image path
+            image_path = os.path.join(dataset_path, file_name)
+            if os.path.exists(image_path):
+                image_paths[image_id] = image_path
+        
+        # Map annotations to images and categories
+        image_annotations = {}
+        for annotation in data.get("annotations", []):
+            image_id = annotation["image_id"]
+            category_id = annotation["category_id"]
+            
+            # Get target class
+            target_class = category_mapping.get(category_id, "other")
+            
+            # Store annotation
+            if image_id not in image_annotations:
+                image_annotations[image_id] = []
+            
+            image_annotations[image_id].append({
+                "category_id": category_id,
+                "target_class": target_class,
+                "bbox": annotation.get("bbox", None)
+            })
+        
+        # Split images into train and validation (80/20)
+        all_image_ids = list(image_paths.keys())
+        
+        import random
+        random.shuffle(all_image_ids)
+        
+        split_idx = int(len(all_image_ids) * 0.8)
+        train_ids = all_image_ids[:split_idx]
+        val_ids = all_image_ids[split_idx:]
+        
+        # Copy and crop training images
+        for image_id in train_ids:
+            if image_id not in image_paths:
+                continue
+                
+            image_path = image_paths[image_id]
+            
+            # Get annotations
+            annotations = image_annotations.get(image_id, [])
+            
+            # If no annotations, skip
+            if not annotations:
+                continue
+            
+            # Open the image
+            try:
+                image = Image.open(image_path)
+            except:
+                continue
+                
+            # For each annotation, crop the image and save
+            for i, annotation in enumerate(annotations):
+                target_class = annotation["target_class"]
+                bbox = annotation.get("bbox")
+                
+                # If no bounding box, use the whole image
+                if bbox is None:
+                    cropped_image = image
+                else:
+                    # COCO format: [x, y, width, height]
+                    x, y, width, height = bbox
+                    cropped_image = image.crop((x, y, x + width, y + height))
+                
+                # Save the cropped image
+                filename = f"taco_{image_id}_{i}.jpg"
+                output_path = os.path.join(train_dir, target_class, filename)
+                cropped_image.save(output_path)
+        
+        # Copy and crop validation images
+        for image_id in val_ids:
+            if image_id not in image_paths:
+                continue
+                
+            image_path = image_paths[image_id]
+            
+            # Get annotations
+            annotations = image_annotations.get(image_id, [])
+            
+            # If no annotations, skip
+            if not annotations:
+                continue
+            
+            # Open the image
+            try:
+                image = Image.open(image_path)
+            except:
+                continue
+                
+            # For each annotation, crop the image and save
+            for i, annotation in enumerate(annotations):
+                target_class = annotation["target_class"]
+                bbox = annotation.get("bbox")
+                
+                # If no bounding box, use the whole image
+                if bbox is None:
+                    cropped_image = image
+                else:
+                    # COCO format: [x, y, width, height]
+                    x, y, width, height = bbox
+                    cropped_image = image.crop((x, y, x + width, y + height))
+                
+                # Save the cropped image
+                filename = f"taco_{image_id}_{i}.jpg"
+                output_path = os.path.join(val_dir, target_class, filename)
+                cropped_image.save(output_path)
+                
+    def _prepare_wasteimgs_dataset(self, dataset_path, train_dir, val_dir):
+        """Prepare the waste-imgs dataset for training"""
+        import glob
+        
+        # Map original classes to our target classes
+        class_mapping = {
+            "metal": "metal",
+            "plastic": "plastic",
+            "glass": "glass",
+            "paper": "paper",
+            "cardboard": "paper",
+            "trash": "other",
+            "biological": "other"
+        }
+        
+        # Create class directories
+        for target_class in set(class_mapping.values()):
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Find all image files
+        image_files = []
+        for ext in ['.jpg', '.jpeg', '.png']:
+            image_files.extend(glob.glob(os.path.join(dataset_path, "**", f"*{ext}"), recursive=True))
+        
+        # Shuffle the files for randomness
+        import random
+        random.shuffle(image_files)
+        
+        # Split into train and validation (80/20)
+        split_idx = int(len(image_files) * 0.8)
+        train_files = image_files[:split_idx]
+        val_files = image_files[split_idx:]
+        
+        # Process training files
+        for file_path in train_files:
+            # Try to determine the class from the file path
+            dir_names = file_path.split(os.sep)
+            original_class = "other"
+            
+            # Check each directory name if it's a known class
+            for dir_name in dir_names:
+                if dir_name.lower() in class_mapping:
+                    original_class = dir_name.lower()
+                    break
+            
+            # Map to our target classes
+            target_class = class_mapping.get(original_class, "other")
+            
+            # Create a new filename
+            filename = f"{original_class}_{os.path.basename(file_path)}"
+            
+            # Copy the file to the target directory
+            shutil.copy(file_path, os.path.join(train_dir, target_class, filename))
+        
+        # Process validation files
+        for file_path in val_files:
+            # Try to determine the class from the file path
+            dir_names = file_path.split(os.sep)
+            original_class = "other"
+            
+            # Check each directory name if it's a known class
+            for dir_name in dir_names:
+                if dir_name.lower() in class_mapping:
+                    original_class = dir_name.lower()
+                    break
+            
+            # Map to our target classes
+            target_class = class_mapping.get(original_class, "other")
+            
+            # Create a new filename
+            filename = f"{original_class}_{os.path.basename(file_path)}"
+            
+            # Copy the file to the target directory
+            shutil.copy(file_path, os.path.join(val_dir, target_class, filename))
+    
+    def _prepare_dtd_dataset(self, dataset_path, train_dir, val_dir):
+        """Prepare the Describable Textures Dataset (DTD) for training"""
+        import glob
+        
+        # Map textures to material classes
+        # This is an approximation since DTD is texture-based, not material-based
+        texture_to_material = {
+            # Metal-like textures
+            "metallic": "metal",
+            "shiny": "metal",
+            "steel": "metal",
+            "foil": "metal",
+            
+            # Glass-like textures
+            "transparent": "glass",
+            "translucent": "glass",
+            "crystal": "glass",
+            
+            # Plastic-like textures
+            "plastic": "plastic",
+            "smooth": "plastic",
+            "glossy": "plastic",
+            
+            # Paper-like textures
+            "fibrous": "paper",
+            "woven": "paper",
+            "wrinkled": "paper",
+            "cracked": "paper",
+            
+            # Other textures
+            "natural": "other",
+            "rough": "other",
+            "bumpy": "other",
+            "bubbly": "other",
+            "porous": "other",
+            "patterned": "other",
+            "dotted": "other",
+            "grid": "other",
+            "crosshatched": "other",
+            "lined": "other",
+            "marbled": "other",
+            "veined": "other",
+            "stained": "other",
+            "flecked": "other",
+            "banded": "other",
+            "interlaced": "other",
+            "zigzagged": "other",
+            "striped": "other"
+        }
+        
+        # Create class directories
+        target_classes = ["metal", "glass", "plastic", "paper", "other"]
+        for target_class in target_classes:
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Find all directories in the dataset path
+        texture_dirs = [d for d in os.listdir(os.path.join(dataset_path, "dtd", "images")) 
+                        if os.path.isdir(os.path.join(dataset_path, "dtd", "images", d))]
+        
+        # Process each texture directory
+        for texture_dir in texture_dirs:
+            # Determine the material class
+            texture_name = texture_dir.lower()
+            material_class = "other"
+            
+            # Check if the texture name exists in our mapping
+            for texture, material in texture_to_material.items():
+                if texture in texture_name:
+                    material_class = material
+                    break
+            
+            # Find all images for this texture
+            texture_path = os.path.join(dataset_path, "dtd", "images", texture_dir)
+            image_files = []
+            for ext in ['.jpg', '.jpeg', '.png']:
+                image_files.extend(glob.glob(os.path.join(texture_path, f"*{ext}")))
+            
+            # Shuffle the files
+            import random
+            random.shuffle(image_files)
+            
+            # Split into train and validation (80/20)
+            split_idx = int(len(image_files) * 0.8)
+            train_files = image_files[:split_idx]
+            val_files = image_files[split_idx:]
+            
+            # Process training files
+            for file_path in train_files:
+                filename = f"{texture_name}_{os.path.basename(file_path)}"
+                shutil.copy(file_path, os.path.join(train_dir, material_class, filename))
+            
+            # Process validation files
+            for file_path in val_files:
+                filename = f"{texture_name}_{os.path.basename(file_path)}"
+                shutil.copy(file_path, os.path.join(val_dir, material_class, filename))
+
+    def combine_datasets(self, dataset_names, output_dir=None):
+        """
+        Combine multiple prepared datasets into a single training dataset
+        """
+        if output_dir is None:
+            output_dir = os.path.join(self.data_dir, "combined_dataset")
+        
+        # Create output directories
+        train_dir = os.path.join(output_dir, "train")
+        val_dir = os.path.join(output_dir, "val")
+        
+        # Create class directories
+        target_classes = ["metal", "glass", "plastic", "paper", "other"]
+        for target_class in target_classes:
+            os.makedirs(os.path.join(train_dir, target_class), exist_ok=True)
+            os.makedirs(os.path.join(val_dir, target_class), exist_ok=True)
+        
+        # Combine datasets
+        for dataset_name in dataset_names:
+            if dataset_name not in self.available_datasets:
+                print(f"Warning: Dataset '{dataset_name}' not found or not downloaded, skipping")
+                continue
+            
+            dataset_path = self.available_datasets[dataset_name]["path"]
+            prepared_path = os.path.join(dataset_path, "prepared")
+            
+            if not os.path.exists(prepared_path):
+                print(f"Warning: Dataset '{dataset_name}' not prepared, skipping")
+                continue
+            
+            # Copy training data
+            dataset_train_dir = os.path.join(prepared_path, "train")
+            for target_class in target_classes:
+                class_dir = os.path.join(dataset_train_dir, target_class)
+                if not os.path.exists(class_dir):
+                    continue
+                
+                # Find all image files
+                image_files = []
+                for ext in ['.jpg', '.jpeg', '.png']:
+                    image_files.extend(glob.glob(os.path.join(class_dir, f"*{ext}")))
+                
+                # Copy each file
+                for file_path in image_files:
+                    filename = f"{dataset_name}_{os.path.basename(file_path)}"
+                    shutil.copy(file_path, os.path.join(train_dir, target_class, filename))
+            
+            # Copy validation data
+            dataset_val_dir = os.path.join(prepared_path, "val")
+            for target_class in target_classes:
+                class_dir = os.path.join(dataset_val_dir, target_class)
+                if not os.path.exists(class_dir):
+                    continue
+                
+                # Find all image files
+                image_files = []
+                for ext in ['.jpg', '.jpeg', '.png']:
+                    image_files.extend(glob.glob(os.path.join(class_dir, f"*{ext}")))
+                
+                # Copy each file
+                for file_path in image_files:
+                    filename = f"{dataset_name}_{os.path.basename(file_path)}"
+                    shutil.copy(file_path, os.path.join(val_dir, target_class, filename))
+        
+        print(f"Combined datasets saved to {output_dir}")
+        return output_dir
+
 # Main function to run the application
 def main():
     """Main entry point for the application"""
     parser = argparse.ArgumentParser(description="Real-time Recyclable Object Detection and Classification System")
-    parser.add_argument('--mode', choices=['train', 'detect', 'download_data'], default='detect',
-                        help='Mode to run: train classifier, run detection, or download data')
+    parser.add_argument('--mode', choices=['train', 'detect', 'download_data', 'prepare_data'], default='detect',
+                        help='Mode to run: train classifier, run detection, download data, or prepare external datasets')
     
     # Input source options
     input_group = parser.add_argument_group('Input options')
@@ -1296,11 +2118,45 @@ def main():
     parser.add_argument('--device', default=None,
                         help='Device to run on (None for auto, cpu, or cuda)')
 
+    # Dataset integration options
+    parser.add_argument('--download_datasets', action='store_true',
+                        help='Download external datasets (for download_data mode)')
+    parser.add_argument('--prepare_datasets', action='store_true',
+                        help='Prepare downloaded datasets for training (for prepare_data mode)')
+    parser.add_argument('--dataset', type=str, default=None,
+                        help='Specific dataset to download/prepare (for download_data/prepare_data modes)')
+    parser.add_argument('--combine_datasets', action='store_true',
+                        help='Combine prepared datasets for training (for prepare_data mode)')
+
     args = parser.parse_args()
 
     if args.mode == 'download_data':
-        # Download and prepare the TrashNet dataset
-        download_trashnet()
+        # Download TrashNet dataset or external datasets
+        if args.download_datasets:
+            integrator = DatasetIntegrator()
+            if args.dataset:
+                integrator.download_dataset(args.dataset)
+            else:
+                integrator.download_all_datasets()
+        else:
+            # Default to downloading TrashNet
+            download_trashnet()
+    
+    elif args.mode == 'prepare_data':
+        # Prepare external datasets for training
+        integrator = DatasetIntegrator()
+        
+        if args.prepare_datasets:
+            if args.dataset:
+                integrator.prepare_dataset_for_training(args.dataset)
+            else:
+                # Prepare all available datasets
+                for dataset_name in integrator.available_datasets.keys():
+                    integrator.prepare_dataset_for_training(dataset_name)
+        
+        if args.combine_datasets:
+            # Combine all prepared datasets
+            integrator.combine_datasets(list(integrator.available_datasets.keys()))
 
     elif args.mode == 'train':
         # Train the recyclable classifier
