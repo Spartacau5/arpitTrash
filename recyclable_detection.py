@@ -202,12 +202,16 @@ class RecyclableDetectionSystem:
             recyclable_text = "Recyclable" if classification['is_recyclable'] else "Non-recyclable"
             label = f"{class_name}: {material} ({recyclable_text}) {conf:.2f}"
 
+            # Increased font size from 0.5 to 1.0 and thickness from 1 to 2
+            font_scale = 1.0
+            thickness = 2
+
             # Draw label background
-            (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
             cv2.rectangle(annotated_frame, (x1, y1 - text_height - 5), (x1 + text_width, y1), color, -1)
 
-            # Draw label text
-            cv2.putText(annotated_frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            # Draw label text with increased size and thickness
+            cv2.putText(annotated_frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness)
 
         return annotated_frame
 

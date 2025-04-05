@@ -1,3 +1,8 @@
+
+```bash
+source venv/bin/activate
+python recyclable_detection.py --mode detect
+```
 # Recyclable Object Detection System
 
 A real-time computer vision system that detects objects in video streams and classifies them as recyclable or non-recyclable materials.
