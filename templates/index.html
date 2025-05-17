@@ -1,0 +1,166 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Recyclable Object Detection</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                text-align: center;
+            }
+            h1 {
+                color: #388e3c;
+            }
+            .video-container {
+                margin: 20px 0;
+                padding: 10px;
+                background-color: #fff;
+                border-radius: 8px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            #video-stream {
+                max-width: 100%;
+                height: auto;
+            }
+            .controls {
+                margin-top: 20px;
+            }
+            button {
+                background-color: #4CAF50;
+                border: none;
+                color: white;
+                padding: 10px 20px;
+                text-align: center;
+                text-decoration: none;
+                display: inline-block;
+                font-size: 16px;
+                margin: 4px 2px;
+                cursor: pointer;
+                border-radius: 4px;
+            }
+            button:hover {
+                background-color: #388e3c;
+            }
+            #stop-btn {
+                background-color: #f44336;
+            }
+            #stop-btn:hover {
+                background-color: #d32f2f;
+            }
+            .legend {
+                margin-top: 20px;
+                text-align: left;
+                display: inline-block;
+                background-color: #fff;
+                padding: 10px 20px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            }
+            .legend-item {
+                margin: 10px 0;
+                display: flex;
+                align-items: center;
+            }
+            .color-box {
+                width: 20px;
+                height: 20px;
+                margin-right: 10px;
+                display: inline-block;
+            }
+            .recyclable {
+                background-color: #4CAF50;
+            }
+            .non-recyclable {
+                background-color: #f44336;
+            }
+            .compostable {
+                background-color: #808000;
+            }
+            .e-waste {
+                background-color: #ff00ff;
+            }
+            .hazardous {
+                background-color: #800000;
+            }
+            .specialized {
+                background-color: #ff8000;
+            }
+            .not-waste {
+                background-color: #808080;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Recyclable Object Detection System</h1>
+            
+            <div class="video-container">
+                <img id="video-stream" src="{{ url_for('video_feed') }}" alt="Video Stream">
+            </div>
+            
+            <div class="controls">
+                <button id="start-btn" onclick="startCamera()">Start Camera</button>
+                <button id="stop-btn" onclick="stopCamera()">Stop Camera</button>
+            </div>
+            
+            <div class="legend">
+                <h3>Classification Legend:</h3>
+                <div class="legend-item">
+                    <div class="color-box recyclable"></div>
+                    <span>Recyclable - Place in regular recycling bin</span>
+                </div>
+                <div class="legend-item">
+                    <div class="color-box non-recyclable"></div>
+                    <span>Non-Recyclable - Place in regular trash bin</span>
+                </div>
+                <div class="legend-item">
+                    <div class="color-box compostable"></div>
+                    <span>Compostable - Place in compost bin</span>
+                </div>
+                <div class="legend-item">
+                    <div class="color-box e-waste"></div>
+                    <span>E-Waste - Take to e-waste collection center</span>
+                </div>
+                <div class="legend-item">
+                    <div class="color-box hazardous"></div>
+                    <span>Hazardous - Take to hazardous waste facility</span>
+                </div>
+                <div class="legend-item">
+                    <div class="color-box specialized"></div>
+                    <span>Specialized Recycling - Requires special recycling program</span>
+                </div>
+                <div class="legend-item">
+                    <div class="color-box not-waste"></div>
+                    <span>Not Waste - Regular object, not considered waste</span>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            function startCamera() {
+                fetch('/start_camera')
+                    .then(response => response.json())
+                    .then(data => console.log(data));
+            }
+            
+            function stopCamera() {
+                fetch('/stop_camera')
+                    .then(response => response.json())
+                    .then(data => console.log(data));
+            }
+            
+            // Start camera automatically when page loads
+            document.addEventListener('DOMContentLoaded', function() {
+                startCamera();
+            });
+        </script>
+    </body>
+    </html>
+    
